@@ -85,14 +85,20 @@ function dateParts(value) {
 
 function renderHome() {
   const recent = [...regattas].sort((a, b) => b.createdAt - a.createdAt).slice(0, 3);
+  const createButton = `<button class="button button-primary" data-action="create"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> New regatta</button>`;
+
+  if (!recent.length) {
+    app.innerHTML = `<div class="welcome-row">${createButton}</div>`;
+    return;
+  }
+
   app.innerHTML = `
     <div class="welcome-row">
       <div><div class="eyebrow">WELCOME ABOARD</div><h1>Ready for race day?</h1><p class="page-subtitle">A little less admin. A lot more sailing.</p></div>
-      <button class="button button-primary" data-action="create"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> New regatta</button>
+      ${createButton}
     </div>
-    <div class="section-heading"><div><h2>Your regattas</h2><p>Pick up where you left off.</p></div>${regattas.length ? `<button class="section-link" data-view="past">See all →</button>` : ""}</div>
-    ${recent.length ? `<div class="regatta-list">${recent.map(regattaCard).join("")}</div>` : `
-      <div class="empty-state"><div class="empty-symbol">⌁</div><h3>Your next great finish starts here.</h3><p>Create a regatta, add your fleet, and record results as they cross the line.</p><div class="empty-actions"><button class="button button-primary" data-action="create">Create your first regatta</button><button class="button button-secondary" data-action="show-tips">See ways to add results</button></div></div>`}`;
+    <div class="section-heading"><div><h2>Your regattas</h2><p>Pick up where you left off.</p></div><button class="section-link" data-view="past">See all →</button></div>
+    <div class="regatta-list">${recent.map(regattaCard).join("")}</div>`;
 }
 
 function regattaCard(regatta, allowDelete = false) {
@@ -793,6 +799,10 @@ function calculateResults(regatta) {
   const hasImportedResults = regatta.races.some((race) => race.imported);
   const hasStartingStandings = !hasImportedResults && boats.some((boat) => Number.isFinite(Number(boat.startingPoints)));
   const hasNewRaceData = regatta.races.some((race) => !race.imported && race.finishes.length);
+  const completedRaceIndexes = regatta.races.reduce((indexes, race, index) => {
+    if (race.savedAt) indexes.unshift(index);
+    return indexes;
+  }, []);
   const standings = boats.map((boat) => {
     const importedScores = (boat.importedScores || []).map((value) => Number.parseFloat(value)).filter(Number.isFinite);
     const derivedNet = importedScores.reduce((sum, value) => sum + value, 0);
@@ -818,16 +828,96 @@ function calculateResults(regatta) {
       totalScore += place;
       return index >= 0 ? String(place) : race.savedAt ? "DNF" : "—";
     });
-    return { boat, score, totalScore, racesCounted, places };
+    const raceTieBreaks = completedRaceIndexes.map((raceIndex) => {
+      const racePlace = places[raceIndex];
+      return racePlace === "DNF"
+        ? boats.length + 1
+        : Number.isFinite(Number(racePlace)) && racePlace !== "" ? Number(racePlace) : Infinity;
+    });
+    return { boat, score, totalScore, racesCounted, places, raceTieBreaks };
   });
   return standings.sort((a, b) => {
+    const scoreDiff = a.score - b.score;
+    if (scoreDiff !== 0) return scoreDiff;
+    for (let index = 0; index < Math.max(a.raceTieBreaks.length, b.raceTieBreaks.length); index += 1) {
+      const aPlace = a.raceTieBreaks[index] ?? Infinity;
+      const bPlace = b.raceTieBreaks[index] ?? Infinity;
+      if (aPlace !== bPlace) return aPlace - bPlace;
+    }
     if ((hasImportedResults || hasStartingStandings) && !hasNewRaceData) {
       const positionDiff = Number(hasImportedResults ? a.boat.importedPosition : a.boat.initialPosition)
         - Number(hasImportedResults ? b.boat.importedPosition : b.boat.initialPosition);
       if (Number.isFinite(positionDiff) && positionDiff !== 0) return positionDiff;
     }
-    return a.score - b.score || a.boat.sail.localeCompare(b.boat.sail, undefined, { numeric: true });
+    return a.boat.sail.localeCompare(b.boat.sail, undefined, { numeric: true });
   });
+}
+
+function calculateTopEightOutlook(standings, focusIndex, fieldSize, bestRank, worstRank) {
+  const focus = standings[focusIndex];
+  if (!focus) return null;
+
+  const currentRank = focusIndex + 1;
+  const focusRacePlace = Math.min(8, fieldSize);
+  let summary;
+  let targets;
+
+  if (fieldSize <= 8) {
+    summary = `The fleet has ${fieldSize} boats, so a top-eight finish is guaranteed.`;
+    targets = [];
+  } else if (worstRank <= 8) {
+    summary = "A top-eight overall finish is secure, even with a DNF next race.";
+    targets = [];
+  } else if (currentRank > 8) {
+    const boatsToPass = currentRank - 8;
+    summary = bestRank > 8
+      ? `You need to pass at least ${boatsToPass} boat${boatsToPass === 1 ? "" : "s"} currently ahead. A win still leaves you ${ordinal(bestRank)}; these are the closest boats to target:`
+      : `You need to pass at least ${boatsToPass} boat${boatsToPass === 1 ? "" : "s"} currently ahead. If you win, focus on these boats around the top-eight cutoff:`;
+    targets = standings.slice(7, focusIndex).map((rival) => {
+      const minimumSafePlace = Array.from({ length: fieldSize + 1 }, (_, index) => index + 1)
+        .find((place) => rival.score + place > focus.score + 1
+          || (rival.score + place === focus.score + 1 && place > 1));
+      const requirement = minimumSafePlace === undefined
+        ? "they stay ahead even with a DNF"
+        : minimumSafePlace <= 2
+          ? "they must finish 2nd or worse"
+          : minimumSafePlace <= fieldSize
+            ? `they must finish ${ordinal(minimumSafePlace)} or worse`
+            : minimumSafePlace === fieldSize + 1
+              ? `they must DNF (${fieldSize + 1} pts)`
+              : "you can’t pass them in one race";
+      return { boat: rival.boat, detail: requirement };
+    });
+  } else if (bestRank > 8) {
+    summary = `A top-eight finish is not reachable in one race; even a win leaves you ${ordinal(bestRank)}.`;
+    targets = [];
+  } else {
+    targets = standings.slice(8).flatMap((rival) => {
+      const scenarios = Array.from({ length: fieldSize }, (_, index) => index + 1)
+        .flatMap((focusPlace) => {
+          const passingPlaces = Array.from({ length: fieldSize }, (_, placeIndex) => placeIndex + 1)
+            .filter((rivalPlace) => rivalPlace !== focusPlace
+              && (rival.score + rivalPlace < focus.score + focusPlace
+                || (rival.score + rivalPlace === focus.score + focusPlace && rivalPlace < focusPlace)));
+          if (!passingPlaces.length) return [];
+          const latestPassingPlace = Math.max(...passingPlaces);
+          const rivalRequirement = latestPassingPlace === 1
+            ? "they need to win"
+            : `they need ${ordinal(latestPassingPlace)} or better`;
+          return [{ focusPlace, rivalRequirement }];
+        });
+      if (!scenarios.length) return [];
+      const detail = scenarios.map(({ focusPlace, rivalRequirement }) =>
+        `if you finish ${ordinal(focusPlace)}, ${rivalRequirement}`
+      ).join("; ");
+      return [{ boat: rival.boat, detail }];
+    });
+    summary = targets.length
+      ? "These boats could overtake you in the following next-race scenarios:"
+      : "No boats currently below the top eight can overtake you in any next-race finish scenario.";
+  }
+
+  return { summary, targets };
 }
 
 function calculateScenarios(regatta, standings, focusBoatId) {
@@ -876,6 +966,7 @@ function calculateScenarios(regatta, standings, focusBoatId) {
     return `cannot be caught in one race; you remain ${needed - fieldSize - 1} pt${needed - fieldSize - 1 === 1 ? "" : "s"} behind even if they DNF`;
   };
   const targetRivals = standings.slice(0, focusIndex);
+  const topEightOutlook = calculateTopEightOutlook(standings, focusIndex, fieldSize, bestRank, worstRank);
   const goldReachable = bestRank === 1;
   const podiumReachable = bestRank <= 3;
   const leader = standings[0];
@@ -941,7 +1032,8 @@ function calculateScenarios(regatta, standings, focusBoatId) {
     goldSummary,
     aheadRequirements,
     topThreeRequirements,
-    medalRisk
+    medalRisk,
+    topEightOutlook
   };
 }
 
@@ -992,16 +1084,17 @@ function renderResults() {
     <section class="results-panel">
       <div class="results-toolbar"><div><strong>Overall results</strong><span>${hasStartingStandings ? "Starting points are the current totals; later race scores are added to these values." : hasImportedResults ? "Imported Net and Total are preserved; new races are added to the series." : "Lowest total score leads. Unfinished boats score DNF (fleet size + 1)."}</span></div><div class="results-toolbar-actions">${regatta.boats.length ? `<label class="sr-only" for="focus-boat-select">Focus boat</label><select id="focus-boat-select" class="race-nav-select" aria-label="Focus boat">${regatta.boats.map((boat) => `<option value="${escapeHtml(boat.id)}" ${boat.id === focusBoatId ? "selected" : ""}>${escapeHtml([boat.sail, boat.name || boat.helm].filter(Boolean).join(" · "))}</option>`).join("")}</select>` : ""}<button class="button button-secondary" data-action="export-results">Export results (CSV)</button><button class="button button-secondary" data-action="edit-setup">Edit setup</button>${editableRaces.length ? `<label class="sr-only" for="amend-race-select">Race to amend</label><select id="amend-race-select" class="race-nav-select">${editableRaces.map(({ race, index }) => `<option value="${index}" ${index === regatta.currentRace ? "selected" : ""}>${escapeHtml(race.name || `Race ${index + 1}`)}</option>`).join("")}</select><button class="button button-secondary" data-action="amend-race">Amend results</button>` : ""}<button class="button button-secondary" data-action="complete-regatta">${regatta.completedAt ? "Reopen regatta" : "Finish regatta"}</button></div></div>
       <div class="table-wrap"><table><thead><tr>${pointsHeader}</tr></thead><tbody>${standings.length ? standings.map(pointsRows).join("") : `<tr><td colspan="${(hasStartingStandings ? 5 : 6) + raceCount}" style="text-align:center;padding:30px;color:#879599">Add boats and record a finish to see standings.</td></tr>`}</tbody></table></div>
-      <div class="results-footer"><span><b>Scoring:</b> ${hasStartingStandings ? "Starting points carry forward; new races add low-point scores. DNF scores fleet size + 1." : hasImportedResults ? "Imported values are kept as shown. New races use low-point scoring; DNF scores fleet size + 1." : "Low point · DNF scores fleet size + 1 · Ties share the same total"}</span><span>${regatta.sourceUrl ? `Source: ${escapeHtml(sourceHostname(regatta.sourceUrl))}` : "Saved on this device"}</span></div>
+      <div class="results-footer"><span><b>Scoring:</b> ${hasStartingStandings ? "Starting points carry forward; new races add low-point scores. DNF scores fleet size + 1." : hasImportedResults ? "Imported values are kept as shown. New races use low-point scoring; DNF scores fleet size + 1." : "Low point · DNF scores fleet size + 1"} Ties break by best finish in the final race, then earlier races.</span><span>${regatta.sourceUrl ? `Source: ${escapeHtml(sourceHostname(regatta.sourceUrl))}` : "Saved on this device"}</span></div>
     </section>
     ${scenarios ? `<section class="scenarios-panel">
-      <div class="scenarios-heading"><div><div class="eyebrow">NEXT-RACE OUTLOOK</div><h2>Focus boat &amp; medal scenarios</h2><p>Projections use low-point scoring and the next-race finish as the tiebreaker.</p></div><span class="scenario-focus-label">Focus: ${escapeHtml(scenarios.focus.boat.sail)}</span></div>
+      <div class="scenarios-heading"><div><div class="eyebrow">NEXT-RACE OUTLOOK</div><h2>Focus boat &amp; medal scenarios</h2><p>Projections use low-point scoring; ties break by best finish in the final race, then earlier races.</p></div><span class="scenario-focus-label">Focus: ${escapeHtml(scenarios.focus.boat.sail)}</span></div>
       <div class="scenario-grid">
         <article class="scenario-card"><div class="scenario-card-heading"><h3>Best &amp; worst rank</h3><span class="scenario-badge scenario-neutral">Next race</span></div><p class="scenario-range"><strong>${ordinal(scenarios.bestRank)}</strong><span>best</span><strong>${ordinal(scenarios.worstRank)}</strong><span>worst</span></p><p>If you win, you could finish as high as ${ordinal(scenarios.bestRank)} overall. A DNF could drop you to ${ordinal(scenarios.worstRank)}.</p></article>
         <article class="scenario-card"><div class="scenario-card-heading"><h3>If you win</h3><span class="scenario-badge scenario-neutral">Target finishes</span></div><ul>${scenarios.aheadRequirements}</ul></article>
         <article class="scenario-card"><div class="scenario-card-heading"><h3>Goals</h3><span class="scenario-badge ${scenarios.goldReachable ? "scenario-reachable" : "scenario-unreachable"}">${scenarios.goldReachable ? "Gold reachable" : "Gold not yet reachable"}</span></div><p><strong>Gold:</strong> ${scenarios.goldSummary}</p><p><strong>Podium:</strong> ${scenarios.podiumReachable ? `Top 3 is reachable (best case: ${ordinal(scenarios.bestRank)}).` : `Top 3 is not reachable in one race (best case: ${ordinal(scenarios.bestRank)}).`}</p><ul>${scenarios.topThreeRequirements.map(({ item, detail }) => `<li><strong>${escapeHtml(item.boat.sail)}</strong> — ${escapeHtml(detail)}</li>`).join("")}</ul></article>
         <article class="scenario-card"><div class="scenario-card-heading"><h3>Medal risk</h3><span class="scenario-badge ${scenarios.focusIndex < 3 ? "scenario-at-risk" : "scenario-neutral"}">${scenarios.focusIndex < 3 ? "Protect your place" : "Chase the podium"}</span></div><p>${scenarios.medalRisk}</p></article>
       </div>
+      ${scenarios.topEightOutlook ? `<article class="top-eight-outlook"><div class="scenario-card-heading"><h3>Top 8 finish outlook</h3><span class="scenario-badge ${scenarios.bestRank <= 8 ? "scenario-reachable" : "scenario-unreachable"}">${scenarios.bestRank <= 8 ? "Top 8 reachable" : "Top 8 out of reach"}</span></div><p>${scenarios.topEightOutlook.summary}</p><div class="top-eight-threat-heading">${scenarios.focusIndex >= 8 ? "Boats to beat for a top-eight finish" : "Possible threat boats"}</div>${scenarios.topEightOutlook.targets.length ? `<ul>${scenarios.topEightOutlook.targets.map(({ boat, detail }) => `<li><strong>${escapeHtml(boat.sail)}</strong> — ${escapeHtml(detail)}</li>`).join("")}</ul>` : ""}</article>` : ""}
     </section>` : ""}
     ${!regatta.boats.length ? `<div class="empty-state" style="margin-top:16px"><h3>Add your fleet to calculate standings.</h3><p>Add boats manually or paste an entry list from a race website.</p><button class="button button-primary" data-action="add-boat">＋ Add a boat</button></div>` : ""}`;
 }
