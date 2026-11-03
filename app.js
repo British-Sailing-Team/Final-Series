@@ -19,7 +19,9 @@ let toastTimer;
 function loadRegattas() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    return Array.isArray(saved) ? saved : [];
+    return Array.isArray(saved)
+      ? saved.map((regatta) => ({ ...regatta, focusBoatId: regatta?.focusBoatId ?? null }))
+      : [];
   } catch (error) {
     console.error("Could not read saved regattas.", error);
     return [];
@@ -131,7 +133,6 @@ function renderCreate() {
           <div class="field"><label for="regatta-date">Start date</label><input id="regatta-date" name="date" type="date" value="${escapeHtml(editingRegatta?.date || new Date().toISOString().slice(0, 10))}" /></div>
           <div class="field"><label for="regatta-venue">Venue</label><input id="regatta-venue" name="venue" placeholder="e.g. Harbor Bay" maxlength="70" value="${escapeHtml(editingRegatta?.venue || "")}" /></div>
         </div>
-        <div class="field"><label for="race-count">Planned races</label><select id="race-count" name="raceCount">${[2, 3, 5, 6, 8, 10].map((count) => `<option value="${count}" ${(editingRegatta?.plannedRaces || 2) === count ? "selected" : ""}>${count} races</option>`).join("")}${editingRegatta && ![2, 3, 5, 6, 8, 10].includes(editingRegatta.plannedRaces) ? `<option value="${editingRegatta.plannedRaces}" selected>${editingRegatta.plannedRaces} races</option>` : ""}</select></div>
         <div class="field" style="margin-bottom:0"><label>Bring in your fleet <span style="font-weight:400;color:#95a1a5">(optional)</span></label>
           <div class="source-tabs" role="tablist">${editingRegatta ? `<span class="source-tab active">Edit fleet and starting points</span>` : `<button type="button" class="source-tab active" data-source="website">From a website</button><button type="button" class="source-tab" data-source="manual">Add manually</button>`}</div>
           <div id="source-content"></div>
@@ -147,8 +148,6 @@ function renderCreate() {
 function renderSource() {
   const target = document.querySelector("#source-content");
   if (!target) return;
-  const raceCountLabel = document.querySelector('label[for="race-count"]');
-  if (raceCountLabel) raceCountLabel.textContent = pendingImportType === "results" ? "Additional races to sail" : "Planned races";
   if (sourceMode === "website") {
     target.innerHTML = `
       <div class="field"><label for="source-url">Results or entry-list URL</label><input id="source-url" type="url" placeholder="https://yourclub.org/results" /><div class="field-help">Saved with this regatta as a reference. Many race sites prevent automatic imports, so copy the entrant list below.</div></div>
@@ -314,8 +313,6 @@ function renderImportPreview() {
   if (!preview || !pendingImport.length) return;
   const scoreHeaders = pendingImportedRaces.slice(0, 3).map((name) => `<th>${escapeHtml(name.replace(/^race\s*/i, "R"))}</th>`).join("");
   const sample = pendingImport.slice(0, 4);
-  const raceCountLabel = document.querySelector('label[for="race-count"]');
-  if (raceCountLabel) raceCountLabel.textContent = pendingImportType === "results" ? "Additional races to sail" : "Planned races";
   preview.innerHTML = `<div class="import-preview">
     <div class="import-preview-heading"><strong>${pendingImportType === "results" ? "Results detected" : pendingImportType === "starting" ? "Starting standings" : "Fleet detected"}</strong><span>${pendingImport.length} boats${pendingImportType === "results" ? ` · ${pendingImportedRaces.length} races` : ""}</span></div>
     ${pendingImportType === "results" ? `<div class="table-wrap"><table><thead><tr><th>Sail no.</th><th>Boat / helm</th>${scoreHeaders}<th>Net</th></tr></thead><tbody>${sample.map((boat) => `<tr><td><strong>${escapeHtml(boat.sail)}</strong></td><td>${escapeHtml(boat.name || boat.helm || "—")}</td>${boat.importedScores.slice(0, 3).map((score) => `<td>${escapeHtml(score || "—")}</td>`).join("")}<td>${escapeHtml(boat.importedNet || "—")}</td></tr>`).join("")}</tbody></table></div>` : pendingImportType === "starting" ? `<div class="table-wrap"><table><thead><tr><th>Position</th><th>Sail number</th><th>Points</th></tr></thead><tbody>${sample.map((boat) => `<tr><td>${escapeHtml(boat.initialPosition)}</td><td><strong>${escapeHtml(boat.sail)}</strong></td><td>${escapeHtml(boat.startingPoints)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="import-preview-fleet">${sample.map((boat) => `<span><strong>${escapeHtml(boat.sail)}</strong>${escapeHtml(boat.name || boat.helm ? ` · ${boat.name || boat.helm}` : "")}</span>`).join("")}</div>`}
@@ -429,11 +426,11 @@ function createRegatta(form) {
     name,
     date: String(formData.get("date") || new Date().toISOString().slice(0, 10)),
     venue: String(formData.get("venue") || "").trim(),
-    plannedRaces: Number(formData.get("raceCount") || 2) + pendingImportedRaces.length,
     sourceUrl,
     boats,
     races,
     currentRace: races.length,
+    focusBoatId: null,
     createdAt,
     completedAt: null
   };
@@ -490,9 +487,8 @@ function updateRegattaSetup(form) {
   regatta.name = String(formData.get("name") || "").trim();
   regatta.date = String(formData.get("date") || regatta.date);
   regatta.venue = String(formData.get("venue") || "").trim();
-  regatta.plannedRaces = Math.max(Number(formData.get("raceCount") || 2), regatta.races.length);
   regatta.boats = boats;
-  regatta.currentRace = Math.min(Number(regatta.currentRace || 0), Math.max(regatta.plannedRaces - 1, 0));
+  if (!boats.some((boat) => boat.id === regatta.focusBoatId)) regatta.focusBoatId = null;
   saveRegattas();
   activeRegattaId = regatta.id;
   editingRegattaId = null;
@@ -538,7 +534,7 @@ function renderRace() {
   const boats = [...regatta.boats].sort((a, b) => a.sail.localeCompare(b.sail, undefined, { numeric: true }));
   app.innerHTML = `
     <div class="race-topline"><button data-view="home">Overview</button><span>›</span><span>${escapeHtml(regatta.name)}</span></div>
-    <div class="race-title-row"><div><div class="eyebrow">ON THE WATER</div><h1>${escapeHtml(regatta.name)}</h1><p class="page-subtitle">${escapeHtml(regatta.venue || dateParts(regatta.date).full)} · ${boats.length} boat${boats.length === 1 ? "" : "s"}</p></div><div class="race-nav"><select id="race-select" aria-label="Select race">${Array.from({ length: Math.max(regatta.plannedRaces || 1, regatta.races.length + 1) }, (_, index) => `<option value="${index}" ${index === raceIndex ? "selected" : ""}>Race ${index + 1}${regatta.races[index] ? " · recorded" : ""}</option>`).join("")}</select><button class="button button-secondary" data-action="edit-setup">Edit setup</button><button class="button button-secondary" data-view="results">Results</button></div></div>
+    <div class="race-title-row"><div><div class="eyebrow">ON THE WATER</div><h1>${escapeHtml(regatta.name)}</h1><p class="page-subtitle">${escapeHtml(regatta.venue || dateParts(regatta.date).full)} · ${boats.length} boat${boats.length === 1 ? "" : "s"}</p></div><div class="race-nav"><select id="race-select" aria-label="Select race">${Array.from({ length: Math.max(regatta.races.length + 1, raceIndex + 1) }, (_, index) => `<option value="${index}" ${index === raceIndex ? "selected" : ""}>Race ${index + 1}${regatta.races[index] ? " · recorded" : ""}</option>`).join("")}</select><button class="button button-secondary" data-action="edit-setup">Edit setup</button><button class="button button-secondary" data-view="results">Results</button></div></div>
     <div class="race-layout">
       <section class="race-panel">
         <div class="race-panel-header"><h2>${isAmending ? `Amend ${escapeHtml(race.name)}` : `Record ${escapeHtml(race.name)}`}</h2><span>${race.finishes.length} finish${race.finishes.length === 1 ? "" : "es"} recorded${isAmending ? " · editing saved results" : ""}</span></div>
@@ -774,8 +770,7 @@ function saveRace() {
   const isAmending = Boolean(race.savedAt);
   regatta.races[index] = { ...race, name: `Race ${index + 1}`, savedAt: new Date().toISOString() };
   if (!isAmending) {
-    if (regatta.races.some((item) => item.imported)) regatta.currentRace = index + 1;
-    else if (index + 1 < (regatta.plannedRaces || 1)) regatta.currentRace = index + 1;
+    regatta.currentRace = index + 1;
   }
   saveRegattas();
   showToast(isAmending ? `Race ${index + 1} amendments saved.` : `Race ${index + 1} saved. Results are up to date.`);
@@ -835,10 +830,135 @@ function calculateResults(regatta) {
   });
 }
 
+function calculateScenarios(regatta, standings, focusBoatId) {
+  const fieldSize = regatta.boats.length;
+  const focusIndex = standings.findIndex((item) => item.boat.id === focusBoatId);
+  const focus = standings[focusIndex];
+  if (!focus || fieldSize < 2) return null;
+
+  const rivals = standings.filter((item) => item.boat.id !== focusBoatId);
+  const focusProjected = focus.score + 1;
+  const requiredFinish = (rival) => Math.ceil(focusProjected - rival.score);
+  const bestRequirements = rivals.map(requiredFinish);
+  const physicalBestRequirements = bestRequirements
+    .filter((finish) => finish <= fieldSize)
+    .sort((a, b) => a - b);
+  let nextPlace = 2;
+  let rivalsBehindFocus = 0;
+  for (const minimumPlace of physicalBestRequirements) {
+    nextPlace = Math.max(nextPlace, minimumPlace);
+    if (nextPlace <= fieldSize) {
+      rivalsBehindFocus += 1;
+      nextPlace += 1;
+    }
+  }
+  const bestRank = 1 + rivals.length - rivalsBehindFocus;
+
+  const focusDnfProjected = focus.score + fieldSize + 1;
+  const maximumRivalPlaces = rivals
+    .map((rival) => Math.floor(focusDnfProjected - rival.score))
+    .sort((a, b) => a - b);
+  let place = 1;
+  let rivalsAheadOnDnf = 0;
+  for (const maximumPlace of maximumRivalPlaces) {
+    if (place <= maximumPlace && place <= fieldSize) {
+      rivalsAheadOnDnf += 1;
+      place += 1;
+    }
+  }
+  const worstRank = 1 + rivalsAheadOnDnf;
+
+  const finishDescription = (rival) => {
+    const needed = requiredFinish(rival);
+    if (needed <= 2) return "must finish 2nd or worse";
+    if (needed <= fieldSize) return `must finish ${ordinal(needed)} or worse`;
+    if (needed === fieldSize + 1) return `must DNF (${fieldSize + 1} pts); a tie goes to your race win`;
+    return `cannot be caught in one race; you remain ${needed - fieldSize - 1} pt${needed - fieldSize - 1 === 1 ? "" : "s"} behind even if they DNF`;
+  };
+  const targetRivals = standings.slice(0, focusIndex);
+  const goldReachable = bestRank === 1;
+  const podiumReachable = bestRank <= 3;
+  const leader = standings[0];
+  const leaderNeeded = leader && leader.boat.id !== focusBoatId ? requiredFinish(leader) : null;
+  const goldSummary = goldReachable
+    ? leaderNeeded === null
+      ? "Win the next race to stay in or take the lead."
+      : leaderNeeded <= fieldSize
+        ? `Win, and ${escapeHtml(leader.boat.sail)} needs ${ordinal(Math.max(2, leaderNeeded))} or worse.`
+        : leaderNeeded === fieldSize + 1
+          ? `Win, and ${escapeHtml(leader.boat.sail)} must DNF (${fieldSize + 1} pts).`
+          : `Win, and every rival must score enough points to stay behind you; ${escapeHtml(leader.boat.sail)} is still ${leaderNeeded - fieldSize - 1} points clear even with a DNF.`
+    : `A win can close at most ${fieldSize} point${fieldSize === 1 ? "" : "s"} on the leader if they DNF.`;
+
+  const topThree = standings.slice(0, 3);
+  const topThreeRequirements = topThree.map((item) => ({
+    item,
+    detail: item.boat.id === focusBoatId ? "You: win the race (1st)." : finishDescription(item)
+  }));
+  const aheadRequirements = targetRivals.length
+    ? targetRivals.map((item) => `<li><strong>${escapeHtml(item.boat.sail)}</strong> — ${escapeHtml(finishDescription(item))}</li>`).join("")
+    : "<li>You are already leading; a race win keeps you ahead on the next-race tiebreak.</li>";
+
+  let medalRisk;
+  if (focusIndex < 3) {
+    const fourth = standings[3];
+    if (fourth) {
+      const gapToFourth = fourth.score - focus.score;
+      const worstSafePlace = Math.min(fieldSize, Math.floor(gapToFourth));
+      const vulnerability = worstSafePlace < 2
+        ? `If ${escapeHtml(fourth.boat.sail)} wins, no finishing place can protect your podium spot.`
+        : gapToFourth >= fieldSize + 1
+          ? `Even a DNF (${fieldSize + 1} pts) keeps you ahead if ${escapeHtml(fourth.boat.sail)} wins.`
+          : `If ${escapeHtml(fourth.boat.sail)} wins, your worst safe finish is ${ordinal(worstSafePlace)}.`;
+      const chasers = standings.slice(focusIndex + 1)
+        .map((item) => ({ item, gap: Math.max(0, item.score - focus.score) }))
+        .filter(({ gap }) => gap <= fieldSize - 1);
+      medalRisk = `${vulnerability}<ul>${chasers.length
+        ? chasers.map(({ item, gap }) => `<li><strong>${escapeHtml(item.boat.sail)}</strong> — ${gap} pt${gap === 1 ? "" : "s"} behind</li>`).join("")
+        : "<li>No boats are within striking distance (${fieldSize - 1} points).</li>"}</ul>`;
+    } else {
+      medalRisk = "There is no 4th-place boat in this fleet.";
+    }
+  } else {
+    const third = standings[2];
+    const firstUnsafePlace = Math.ceil(fieldSize + third.score - focus.score + 1);
+    medalRisk = firstUnsafePlace <= 1
+      ? `Even a race win would leave you more than ${fieldSize - 1} points behind 3rd if they win next race.`
+      : firstUnsafePlace <= fieldSize
+        ? `If 3rd place wins, a ${ordinal(firstUnsafePlace)} finish or worse (including DNF) leaves you more than ${fieldSize - 1} points behind; aim for ${ordinal(firstUnsafePlace - 1)} or better.`
+        : firstUnsafePlace === fieldSize + 1
+          ? `If 3rd place wins, a DNF (${fieldSize + 1} pts) leaves you more than ${fieldSize - 1} points behind; any finish place keeps the podium within reach.`
+          : `Even a DNF keeps you within ${fieldSize - 1} points of 3rd if they win next race.`;
+  }
+
+  return {
+    focus,
+    focusIndex,
+    bestRank,
+    worstRank,
+    goldReachable,
+    podiumReachable,
+    goldSummary,
+    aheadRequirements,
+    topThreeRequirements,
+    medalRisk
+  };
+}
+
+function ordinal(value) {
+  const remainder = value % 100;
+  if (remainder >= 11 && remainder <= 13) return `${value}th`;
+  return `${value}${({ 1: "st", 2: "nd", 3: "rd" })[value % 10] || "th"}`;
+}
+
 function renderResults() {
   const regatta = activeRegatta();
   if (!regatta) return setView("home");
   const standings = calculateResults(regatta);
+  const focusBoatId = regatta.boats.some((boat) => boat.id === regatta.focusBoatId)
+    ? regatta.focusBoatId
+    : standings[0]?.boat.id || null;
+  const scenarios = calculateScenarios(regatta, standings, focusBoatId);
   const hasImportedResults = regatta.races.some((race) => race.imported);
   const hasStartingStandings = !hasImportedResults && regatta.boats.some((boat) => Number.isFinite(Number(boat.startingPoints)));
   const hasNewRaceData = regatta.races.some((race) => !race.imported && race.finishes.length);
@@ -858,10 +978,11 @@ function renderResults() {
         : index + 1;
     const points = item.racesCounted || hasStartingStandings ? item.score : "—";
     const races = Array.from({ length: raceCount }, (_, raceIndex) => `<td>${escapeHtml(item.places[raceIndex] || "—")}</td>`).join("");
+    const rowClasses = [index === 0 ? "leader-row" : "", item.boat.id === focusBoatId ? "focus-row" : ""].filter(Boolean).join(" ");
     if (hasStartingStandings) {
-      return `<tr class="${index === 0 ? "leader-row" : ""}"><td class="rank-cell">${position}</td><td><strong>${escapeHtml(item.boat.sail)}</strong></td><td>${escapeHtml(item.boat.name || "—")}</td><td>${escapeHtml(item.boat.helm || "—")}</td><td class="score-cell">${points}</td>${races}</tr>`;
+      return `<tr class="${rowClasses}"><td class="rank-cell">${position}</td><td><strong>${escapeHtml(item.boat.sail)}</strong></td><td>${escapeHtml(item.boat.name || "—")}</td><td>${escapeHtml(item.boat.helm || "—")}</td><td class="score-cell">${points}</td>${races}</tr>`;
     }
-    return `<tr class="${index === 0 ? "leader-row" : ""}"><td class="rank-cell">${position}</td><td><strong>${escapeHtml(item.boat.sail)}</strong></td><td>${escapeHtml(item.boat.name || "—")}</td><td>${escapeHtml(item.boat.helm || "—")}</td><td class="score-cell">${item.racesCounted ? item.score : "—"}</td><td class="score-cell">${item.racesCounted ? item.totalScore : "—"}</td>${races}</tr>`;
+    return `<tr class="${rowClasses}"><td class="rank-cell">${position}</td><td><strong>${escapeHtml(item.boat.sail)}</strong></td><td>${escapeHtml(item.boat.name || "—")}</td><td>${escapeHtml(item.boat.helm || "—")}</td><td class="score-cell">${item.racesCounted ? item.score : "—"}</td><td class="score-cell">${item.racesCounted ? item.totalScore : "—"}</td>${races}</tr>`;
   };
   const editableRaces = regatta.races.map((race, index) => ({ race, index }))
     .filter(({ race }) => race.savedAt && !race.imported && race.finishes.length);
@@ -869,10 +990,19 @@ function renderResults() {
     <div class="race-topline"><button data-view="home">Overview</button><span>›</span><span>${escapeHtml(regatta.name)}</span></div>
     <div class="race-title-row"><div><div class="eyebrow">LIVE STANDINGS</div><h1>${escapeHtml(regatta.name)}</h1><p class="page-subtitle">${escapeHtml(regatta.venue || dateParts(regatta.date).full)} · Low-point scoring · ${regatta.boats.length} boats</p></div><div class="results-actions">${regatta.completedAt ? `<span class="race-progress"><i></i> Regatta complete</span>` : `<span class="race-progress"><i></i> ${regatta.races.filter((race) => race.savedAt).length} races saved</span><button class="button button-primary" data-view="race">${hasUnsavedFinishes ? "Continue recording →" : "Record finishes →"}</button>`}</div></div>
     <section class="results-panel">
-      <div class="results-toolbar"><div><strong>Overall results</strong><span>${hasStartingStandings ? "Starting points are the current totals; later race scores are added to these values." : hasImportedResults ? "Imported Net and Total are preserved; new races are added to the series." : "Lowest total score leads. Unfinished boats score DNF (fleet size + 1)."}</span></div><div class="results-toolbar-actions"><button class="button button-secondary" data-action="export-results">Export results (CSV)</button><button class="button button-secondary" data-action="edit-setup">Edit setup</button>${editableRaces.length ? `<label class="sr-only" for="amend-race-select">Race to amend</label><select id="amend-race-select" class="race-nav-select">${editableRaces.map(({ race, index }) => `<option value="${index}" ${index === regatta.currentRace ? "selected" : ""}>${escapeHtml(race.name || `Race ${index + 1}`)}</option>`).join("")}</select><button class="button button-secondary" data-action="amend-race">Amend results</button>` : ""}<button class="button button-secondary" data-action="complete-regatta">${regatta.completedAt ? "Reopen regatta" : "Finish regatta"}</button></div></div>
+      <div class="results-toolbar"><div><strong>Overall results</strong><span>${hasStartingStandings ? "Starting points are the current totals; later race scores are added to these values." : hasImportedResults ? "Imported Net and Total are preserved; new races are added to the series." : "Lowest total score leads. Unfinished boats score DNF (fleet size + 1)."}</span></div><div class="results-toolbar-actions">${regatta.boats.length ? `<label class="sr-only" for="focus-boat-select">Focus boat</label><select id="focus-boat-select" class="race-nav-select" aria-label="Focus boat">${regatta.boats.map((boat) => `<option value="${escapeHtml(boat.id)}" ${boat.id === focusBoatId ? "selected" : ""}>${escapeHtml([boat.sail, boat.name || boat.helm].filter(Boolean).join(" · "))}</option>`).join("")}</select>` : ""}<button class="button button-secondary" data-action="export-results">Export results (CSV)</button><button class="button button-secondary" data-action="edit-setup">Edit setup</button>${editableRaces.length ? `<label class="sr-only" for="amend-race-select">Race to amend</label><select id="amend-race-select" class="race-nav-select">${editableRaces.map(({ race, index }) => `<option value="${index}" ${index === regatta.currentRace ? "selected" : ""}>${escapeHtml(race.name || `Race ${index + 1}`)}</option>`).join("")}</select><button class="button button-secondary" data-action="amend-race">Amend results</button>` : ""}<button class="button button-secondary" data-action="complete-regatta">${regatta.completedAt ? "Reopen regatta" : "Finish regatta"}</button></div></div>
       <div class="table-wrap"><table><thead><tr>${pointsHeader}</tr></thead><tbody>${standings.length ? standings.map(pointsRows).join("") : `<tr><td colspan="${(hasStartingStandings ? 5 : 6) + raceCount}" style="text-align:center;padding:30px;color:#879599">Add boats and record a finish to see standings.</td></tr>`}</tbody></table></div>
       <div class="results-footer"><span><b>Scoring:</b> ${hasStartingStandings ? "Starting points carry forward; new races add low-point scores. DNF scores fleet size + 1." : hasImportedResults ? "Imported values are kept as shown. New races use low-point scoring; DNF scores fleet size + 1." : "Low point · DNF scores fleet size + 1 · Ties share the same total"}</span><span>${regatta.sourceUrl ? `Source: ${escapeHtml(sourceHostname(regatta.sourceUrl))}` : "Saved on this device"}</span></div>
     </section>
+    ${scenarios ? `<section class="scenarios-panel">
+      <div class="scenarios-heading"><div><div class="eyebrow">NEXT-RACE OUTLOOK</div><h2>Focus boat &amp; medal scenarios</h2><p>Projections use low-point scoring and the next-race finish as the tiebreaker.</p></div><span class="scenario-focus-label">Focus: ${escapeHtml(scenarios.focus.boat.sail)}</span></div>
+      <div class="scenario-grid">
+        <article class="scenario-card"><div class="scenario-card-heading"><h3>Best &amp; worst rank</h3><span class="scenario-badge scenario-neutral">Next race</span></div><p class="scenario-range"><strong>${ordinal(scenarios.bestRank)}</strong><span>best</span><strong>${ordinal(scenarios.worstRank)}</strong><span>worst</span></p><p>If you win, you could finish as high as ${ordinal(scenarios.bestRank)} overall. A DNF could drop you to ${ordinal(scenarios.worstRank)}.</p></article>
+        <article class="scenario-card"><div class="scenario-card-heading"><h3>If you win</h3><span class="scenario-badge scenario-neutral">Target finishes</span></div><ul>${scenarios.aheadRequirements}</ul></article>
+        <article class="scenario-card"><div class="scenario-card-heading"><h3>Goals</h3><span class="scenario-badge ${scenarios.goldReachable ? "scenario-reachable" : "scenario-unreachable"}">${scenarios.goldReachable ? "Gold reachable" : "Gold not yet reachable"}</span></div><p><strong>Gold:</strong> ${scenarios.goldSummary}</p><p><strong>Podium:</strong> ${scenarios.podiumReachable ? `Top 3 is reachable (best case: ${ordinal(scenarios.bestRank)}).` : `Top 3 is not reachable in one race (best case: ${ordinal(scenarios.bestRank)}).`}</p><ul>${scenarios.topThreeRequirements.map(({ item, detail }) => `<li><strong>${escapeHtml(item.boat.sail)}</strong> — ${escapeHtml(detail)}</li>`).join("")}</ul></article>
+        <article class="scenario-card"><div class="scenario-card-heading"><h3>Medal risk</h3><span class="scenario-badge ${scenarios.focusIndex < 3 ? "scenario-at-risk" : "scenario-neutral"}">${scenarios.focusIndex < 3 ? "Protect your place" : "Chase the podium"}</span></div><p>${scenarios.medalRisk}</p></article>
+      </div>
+    </section>` : ""}
     ${!regatta.boats.length ? `<div class="empty-state" style="margin-top:16px"><h3>Add your fleet to calculate standings.</h3><p>Add boats manually or paste an entry list from a race website.</p><button class="button button-primary" data-action="add-boat">＋ Add a boat</button></div>` : ""}`;
 }
 
@@ -1096,6 +1226,13 @@ document.addEventListener("change", (event) => {
     regatta.currentRace = nextIndex;
     saveRegattas();
     return renderRace();
+  }
+  if (event.target.id === "focus-boat-select") {
+    const regatta = activeRegatta();
+    if (!regatta || !regatta.boats.some((boat) => boat.id === event.target.value)) return;
+    regatta.focusBoatId = event.target.value;
+    saveRegattas();
+    return renderResults();
   }
 });
 document.addEventListener("keydown", (event) => {
