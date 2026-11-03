@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f5f7f4" />
+    <meta name="description" content="A simple race-day companion for recording sailing finishes and tracking regatta results." />
+    <title>Final Series — Sailing race results</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="#" data-view="home" aria-label="Final Series home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 36 36" fill="none"><path d="M7 25.5c4.2 0 4.2-3.5 8.4-3.5s4.2 3.5 8.4 3.5 4.2-3.5 8.4-3.5M7 31c4.2 0 4.2-3.5 8.4-3.5s4.2 3.5 8.4 3.5 4.2-3.5 8.4-3.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M18 5v15M18 5l11 12H18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span>FINAL SERIES</span>
+        </a>
+        <div class="sidebar-label">WORKSPACE</div>
+        <nav class="primary-nav" aria-label="Main navigation">
+          <button class="nav-link active" data-view="home">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+            Overview
+          </button>
+          <button class="nav-link" data-view="past">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="16" rx="2"/><path d="M7.5 2.5v4M16.5 2.5v4M3.5 9.5h17M8 13.5h3M8 17h3M14 13.5h2"/></svg>
+            Past regattas
+          </button>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="weather-card">
+            <span class="weather-icon" aria-hidden="true">↗</span>
+            <div><strong>Made for race day</strong><span>Quick, clear, hands-free.</span></div>
+          </div>
+          <div class="sidebar-foot">YOUR RACE DAY, IN RHYTHM.</div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <a class="mobile-brand" href="#" data-view="home" aria-label="Final Series home"><span class="brand-mark" aria-hidden="true">↗</span> FINAL SERIES</a>
+          <div class="breadcrumb"><span>Workspace</span><span class="crumb-slash">/</span><strong id="breadcrumb-current">Overview</strong></div>
+          <button class="avatar" aria-label="Your profile">B</button>
+        </header>
+        <div id="app" class="page-content"></div>
+      </main>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
